@@ -25,14 +25,22 @@
 #include "wrd-utilities/I2CEx.h"
 #include "wrd-utilities/SharedModules.h"
 
-#define MAX_READ (2*3*32)
+#define MAX_READ  4
 #define MAX_WRITE 4
+#define FRAME_SIZE 6
 
 using namespace mbed::util;
 
 class BMA2X2
 {
 public:
+    typedef struct {
+        int32_t x;
+        int32_t y;
+        int32_t z;
+        uint32_t offset;
+    } acceleration_t;
+
     typedef enum {
         RANGE_2G    = 0x03,
         RANGE_4G    = 0x05,
@@ -65,15 +73,20 @@ public:
     void setBandwidth(bandwidth_t bandwidth, FunctionPointer0<void> callback);
     void setFifo(fifo_t fifo, FunctionPointer0<void> callback);
 
-    void getFifo(uint8_t* buffer, uint8_t length, FunctionPointer0<void> callback);
+    void getRawBuffer(uint8_t* buffer, uint32_t length, FunctionPointer1<void, uint8_t> callback);
+
+    void getFifoStatus(FunctionPointer1<void, uint8_t> callback);
+    void getFifo(uint8_t* buffer, uint32_t length, FunctionPointer0<void> callback);
+
+    void getSampleFromBuffer(const uint8_t* buffer, uint8_t index, acceleration_t& measurement);
 
 private:
     typedef enum {
+        REG_FIFO_STATUS     = 0x0E,
         REG_PMU_RANGE       = 0x0F,
         REG_PMU_BW          = 0x10,
         REG_PMU_LPW         = 0x11,
         REG_PMU_LOW_POWER   = 0x12,
-        REG_FIFO_STATUS     = 0x0E,
         REG_FIFO_CONFIG_1   = 0x3E,
         REG_FIFO_DATA       = 0x3F
     } register_t;
@@ -84,15 +97,25 @@ private:
 
     void init(void);
     void powerOnDone(void);
-    void deviceReady(void);
-    void setRangeDone(void);
-    void setBandwidthDone(void);
-    void setFifoDone(void);
+    void getFifoStatusDone(void);
+
+    void getRawBuffer1(uint8_t status);
+    void getRawBuffer2(void);
 
     I2CEx& i2c;
     DigitalOutEx enable;
     InterruptInEx irq;
     FunctionPointer0<void> setDone;
+    FunctionPointer1<void, uint8_t> getCallback;
+
+    /* get raw buffer */
+    uint8_t* getRawBufferPointer;
+    uint32_t getRawBufferLength;
+    uint8_t getRawFrames;
+    FunctionPointer1<void, uint8_t> getRawCallback;
+
+    int32_t currentResolution;
+    uint32_t currentInterval;
 
     char memoryWrite[MAX_WRITE];
     char memoryRead[MAX_READ];

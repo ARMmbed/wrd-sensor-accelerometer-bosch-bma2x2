@@ -20,10 +20,12 @@
 BMA2X2::BMA2X2(I2CEx& _i2c, DigitalOutEx& _enable, InterruptInEx& _irq)
     :   i2c(_i2c),
         enable(_enable),
-        irq(_irq)
+        irq(_irq),
+        currentResolution(98),
+        currentInterval(1)
 {
     minar::Scheduler::postCallback(this, &BMA2X2::init)
-        .delay(minar::milliseconds(100))
+        .delay(minar::milliseconds(10))
         .tolerance(1);
 }
 
@@ -35,9 +37,6 @@ BMA2X2::~BMA2X2()
 void BMA2X2::init()
 {
     i2c.frequency(400000);
-
-    FunctionPointer0<void> fp(this, &BMA2X2::deviceReady);
-    powerOn(fp);
 }
 
 void BMA2X2::powerOn(FunctionPointer0<void> callback)
@@ -50,46 +49,70 @@ void BMA2X2::powerOnDone()
 {
     if (setDone)
     {
-        minar::Scheduler::postCallback(this, &BMA2X2::deviceReady)
-            .delay(minar::milliseconds(10))
+        minar::Scheduler::postCallback(setDone)
+            .delay(minar::milliseconds(100))
             .tolerance(1);
 
         setDone.clear();
     }
 }
 
-void BMA2X2::deviceReady()
-{
-    FunctionPointer0<void> fp(this, &BMA2X2::setRangeDone);
-    setRange(BMA2X2::RANGE_2G, fp);
-}
-
-void BMA2X2::setRangeDone()
-{
-    FunctionPointer0<void> fp(this, &BMA2X2::setBandwidthDone);
-    setBandwidth(BMA2X2::BANDWIDTH_62_5HZ, fp);
-}
-
-void BMA2X2::setBandwidthDone()
-{
-    FunctionPointer0<void> fp(this, &BMA2X2::setFifoDone);
-    setFifo(BMA2X2::FIFO_STREAM, fp);
-}
-
-void BMA2X2::setFifoDone()
-{
-
-}
-
-
 void BMA2X2::setRange(range_t range, FunctionPointer0<void> callback)
 {
+    switch (range)
+    {
+        case RANGE_2G:
+                        currentResolution = 98;
+                        break;
+        case RANGE_4G:
+                        currentResolution = 195;
+                        break;
+        case RANGE_8G:
+                        currentResolution = 391;
+                        break;
+        case RANGE_16G:
+                        currentResolution = 781;
+                        break;
+        default:
+                        currentResolution = 98;
+                        break;
+    }
+
     memoryWrite[0] = range;
     i2c.write(BMA2X2::ADDRESS, REG_PMU_RANGE, memoryWrite, 1, callback);
 }
 
 void BMA2X2::setBandwidth(bandwidth_t bandwidth, FunctionPointer0<void> callback)
 {
+    switch (bandwidth)
+    {
+        case BANDWIDTH_7_81HZ:
+                                currentInterval = 128;
+                                break;
+        case BANDWIDTH_15_63HZ:
+                                currentInterval = 64;
+                                break;
+        case BANDWIDTH_31_25HZ:
+                                currentInterval = 32;
+                                break;
+        case BANDWIDTH_62_5HZ:
+                                currentInterval = 16;
+                                break;
+        case BANDWIDTH_125HZ:
+                                currentInterval = 8;
+                                break;
+        case BANDWIDTH_250HZ:
+                                currentInterval = 4;
+                                break;
+        case BANDWIDTH_500HZ:
+                                currentInterval = 2;
+                                break;
+        case BANDWIDTH_1000HZ:
+        default:
+                                currentInterval = 1;
+                                break;
+    }
+
     memoryWrite[0] = bandwidth;
     i2c.write(BMA2X2::ADDRESS, REG_PMU_BW, memoryWrite, 1, callback);
 }
@@ -100,8 +123,91 @@ void BMA2X2::setFifo(fifo_t fifo, FunctionPointer0<void> callback)
     i2c.write(BMA2X2::ADDRESS, REG_FIFO_CONFIG_1, memoryWrite, 1, callback);
 }
 
-void BMA2X2::getFifo(uint8_t* buffer, uint8_t length, FunctionPointer0<void> callback)
+void BMA2X2::getFifoStatus(FunctionPointer1<void, uint8_t> callback)
+{
+    getCallback = callback;
+    i2c.read(BMA2X2::ADDRESS, REG_FIFO_STATUS, memoryRead, 1, this, &BMA2X2::getFifoStatusDone);
+}
+
+void BMA2X2::getFifoStatusDone()
+{
+    if (getCallback)
+    {
+        minar::Scheduler::postCallback(getCallback.bind(memoryRead[0]));
+        getCallback.clear();
+    }
+}
+
+void BMA2X2::getFifo(uint8_t* buffer, uint32_t length, FunctionPointer0<void> callback)
 {
     i2c.read(BMA2X2::ADDRESS, REG_FIFO_DATA, (char*) buffer, length, callback);
 }
 
+void BMA2X2::getRawBuffer(uint8_t* buffer, uint32_t length, FunctionPointer1<void, uint8_t> callback)
+{
+    getRawBufferPointer = buffer;
+    getRawBufferLength = length;
+    getRawCallback = callback;
+
+    FunctionPointer1<void, uint8_t> fp(this, &BMA2X2::getRawBuffer1);
+    getFifoStatus(fp);
+}
+
+void BMA2X2::getRawBuffer1(uint8_t status)
+{
+    getRawFrames = status & 0x7F;
+
+    /* calculate how many frames to retrieve */
+    if (getRawFrames * FRAME_SIZE > getRawBufferLength)
+    {
+        getRawFrames = getRawBufferLength / FRAME_SIZE;
+    }
+
+    /* get frames if possible */
+    if (getRawFrames > 0)
+    {
+        FunctionPointer0<void> fp(this, &BMA2X2::getRawBuffer2);
+        getFifo(getRawBufferPointer, getRawFrames * FRAME_SIZE, fp);
+    }
+    else
+    {
+        /* signal get done */
+        getRawBuffer2();
+    }
+}
+
+void BMA2X2::getRawBuffer2()
+{
+    if (getRawCallback)
+    {
+        minar::Scheduler::postCallback(getRawCallback.bind(getRawFrames));
+        getRawCallback.clear();
+    }
+}
+
+void BMA2X2::getSampleFromBuffer(const uint8_t* buffer, uint8_t index, acceleration_t& measurement)
+{
+    int16_t x;
+    int16_t y;
+    int16_t z;
+
+    /*  read frame based on index */
+    x =            buffer[index * 6 + 1];
+    x = (x << 8) | buffer[index * 6];
+
+    y =            buffer[index * 6 + 3];
+    y = (y << 8) | buffer[index * 6 + 2];
+
+    z =            buffer[index * 6 + 5];
+    z = (z << 8) | buffer[index * 6 + 4];
+
+    /*  convert raw values to mg */
+    measurement.x = (x * currentResolution) / 100;
+    measurement.y = (y * currentResolution) / 100;
+    measurement.z = (z * currentResolution) / 100;
+
+    /*  the offset is calculated with an added 1 so that multiple
+        buffers can be chained together.
+    */
+    measurement.offset = (index + 1) * currentInterval;
+}
