@@ -192,14 +192,17 @@ void BMA2X2::getSampleFromBuffer(const uint8_t* buffer, uint8_t index, accelerat
     int16_t z;
 
     /*  read frame based on index */
-    x =            buffer[index * 6 + 1];
-    x = (x << 8) | buffer[index * 6];
+    x =             buffer[index * 6 + 1];
+    x = (x << 8) | (buffer[index * 6    ] & 0xF0);
+    x = (x >> 4);
 
-    y =            buffer[index * 6 + 3];
-    y = (y << 8) | buffer[index * 6 + 2];
+    y =             buffer[index * 6 + 3];
+    y = (y << 8) | (buffer[index * 6 + 2] & 0xF0);
+    y = (y >> 4);
 
-    z =            buffer[index * 6 + 5];
-    z = (z << 8) | buffer[index * 6 + 4];
+    z =             buffer[index * 6 + 5];
+    z = (z << 8) | (buffer[index * 6 + 4] & 0xF0);
+    z = (z >> 4);
 
     /*  convert raw values to mg */
     measurement.x = (x * currentResolution) / 100;
