@@ -1,6 +1,6 @@
 {
   "name": "wrd-sensor-accelerometer-bosch-bma2x2",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Driver for the Bosch BMA2x2 series accelerometer.",
   "keywords": [],
   "author": "Marcus Chang <marcus.chang@arm.com>",
